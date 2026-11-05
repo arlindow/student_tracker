@@ -1,0 +1,28 @@
+# Arquivos de sistema operacional
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# IDEs e Editores
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Dependências e ferramentas de build / testes (PHP / Node)
+/vendor/
+/node_modules/
+composer.lock
+package-lock.json
+.phpunit.result.cache
+
+# Logs, caches e arquivos temporários
+*.log
+*.tmp
+*.bak
+*.cache
+
+# Arquivos de ambiente e configurações locais
+.env
+.env.*
