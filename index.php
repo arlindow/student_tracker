@@ -3,7 +3,7 @@ require_once(__DIR__ . '/../../config.php');
 
 // 1. Parâmetros e contexto (curso)
 $courseid = required_param('id', PARAM_INT);
-$filter   = optional_param('status', '', PARAM_ALPHA); // never | risk | active
+$filter   = optional_param('status', '', PARAM_ALPHA); // active | attention | risk | dropout | never
 
 $course  = get_course($courseid);
 $context = context_course::instance($courseid);
@@ -19,11 +19,13 @@ $PAGE->set_pagelayout('incourse');
 $PAGE->set_title(get_string('pluginname', 'local_student_tracker'));
 $PAGE->set_heading($course->fullname);
 
-// 3. Regra de corte configurável (padrão: 7 dias)
-$riskdays = (int) (get_config('local_student_tracker', 'riskdays') ?: 7);
-$limit    = time() - ($riskdays * DAYSECS);
+// 3. Réguas de corte temporais (em segundos)
+$now = time();
+$limit_7d  = $now - (7 * DAYSECS);
+$limit_14d = $now - (14 * DAYSECS);
+$limit_30d = $now - (30 * DAYSECS);
 
-// 4. Consulta: um registro por aluno, último acesso AO CURSO
+// 4. Consulta SQL: Busca estudantes com matrícula ativa e último acesso ao curso
 $namefields = 'u.firstname, u.lastname, u.firstnamephonetic, u.lastnamephonetic, '
             . 'u.middlename, u.alternatename';
 
@@ -52,19 +54,29 @@ $params = [
 
 $students = $DB->get_records_sql($sql, $params);
 
-// 5. Categorias mutuamente exclusivas (nunca + risco + ativos = total)
-$counts = ['never' => 0, 'risk' => 0, 'active' => 0];
-$rows   = [];
+// 5. Categorização nas 5 faixas pedagógicas
+$counts = [
+    'active'    => 0,
+    'attention' => 0,
+    'risk'      => 0,
+    'dropout'   => 0,
+    'never'     => 0,
+];
+$rows = [];
 
 foreach ($students as $student) {
     $last = (int) $student->lastcourseaccess;
 
     if ($last === 0) {
         $status = 'never';
-    } else if ($last < $limit) {
+    } elseif ($last >= $limit_7d) {
+        $status = 'active';
+    } elseif ($last >= $limit_14d) {
+        $status = 'attention';
+    } elseif ($last >= $limit_30d) {
         $status = 'risk';
     } else {
-        $status = 'active';
+        $status = 'dropout';
     }
 
     $counts[$status]++;
@@ -76,52 +88,66 @@ foreach ($students as $student) {
 }
 $total = count($students);
 
-// 6. Metadados de exibição
+// 6. Configuração dos 5 Cards e Badges alinhados com o lang
 $cards = [
-    'never'  => ['bg-danger text-white',  get_string('never_accessed', 'local_student_tracker')],
-    'risk'   => ['bg-warning text-dark',  get_string('at_risk', 'local_student_tracker', $riskdays)],
-    'active' => ['bg-success text-white', get_string('active', 'local_student_tracker')],
+    'active'    => ['bg-success text-white', 'status_active'],
+    'attention' => ['bg-info text-white',    'status_attention'],
+    'risk'      => ['bg-warning text-dark',  'status_risk'],
+    'dropout'   => ['bg-danger text-white',   'status_dropout'],
+    'never'     => ['bg-dark text-white',     'status_never'],
 ];
+
 $badges = [
-    'never'  => ['badge-danger',  'status_never'],
-    'risk'   => ['badge-warning', 'status_risk'],
-    'active' => ['badge-success', 'status_active'],
+    'active'    => ['badge-success', 'status_active'],
+    'attention' => ['badge-info',    'status_attention'],
+    'risk'      => ['badge-warning', 'status_risk'],
+    'dropout'   => ['badge-danger',  'status_dropout'],
+    'never'     => ['badge-dark',    'status_never'],
 ];
 
 echo $OUTPUT->header();
 echo $OUTPUT->heading(get_string('dashboard_title', 'local_student_tracker'));
 ?>
+
+<!-- Grade de Cards com as 5 métricas de acompanhamento -->
 <div class="row mb-4">
-    <?php foreach ($cards as $key => [$classes, $label]): ?>
-        <div class="col-md-4">
+    <?php foreach ($cards as $key => [$classes, $strkey]): ?>
+        <div class="col-md mb-2">
             <a href="<?php echo new moodle_url($PAGE->url, ['status' => $key]); ?>"
-               class="card <?php echo $classes; ?> mb-3 text-decoration-none">
-                <div class="card-body">
-                    <h5 class="card-title"><?php echo $label; ?></h5>
-                    <h2 class="display-5 font-weight-bold">
+               class="card <?php echo $classes; ?> text-decoration-none shadow-sm h-100">
+                <div class="card-body p-3">
+                    <h6 class="card-title mb-1"><?php echo get_string($strkey, 'local_student_tracker'); ?></h6>
+                    <h3 class="font-weight-bold mb-0">
                         <?php echo $counts[$key]; ?>
-                        <small>(<?php echo $total ? round($counts[$key] * 100 / $total) : 0; ?>%)</small>
-                    </h2>
+                        <small class="h6 font-weight-normal">
+                            (<?php echo $total ? round($counts[$key] * 100 / $total) : 0; ?>%)
+                        </small>
+                    </h3>
                 </div>
             </a>
         </div>
     <?php endforeach; ?>
 </div>
 
-<p>
-    <?php echo get_string('total_students', 'local_student_tracker', $total); ?>
+<div class="d-flex justify-content-between align-items-center mb-3">
+    <div>
+        <strong><?php echo get_string('total_students', 'local_student_tracker'); ?>:</strong> <?php echo $total; ?>
+        <?php if ($filter !== ''): ?>
+            <span class="badge badge-secondary ml-2">Filtro: <?php echo get_string('status_' . $filter, 'local_student_tracker'); ?></span>
+        <?php endif; ?>
+    </div>
     <?php if ($filter !== ''): ?>
-        &middot; <a href="<?php echo $PAGE->url; ?>"><?php echo get_string('clear_filter', 'local_student_tracker'); ?></a>
+        <a href="<?php echo $PAGE->url; ?>" class="btn btn-sm btn-outline-secondary">Limpar filtro</a>
     <?php endif; ?>
-</p>
+</div>
 
 <?php if (empty($rows)): ?>
-    <?php echo $OUTPUT->notification(get_string('no_students', 'local_student_tracker'), 'info'); ?>
+    <div class="alert alert-info">Nenhum estudante encontrado para esta situação.</div>
 <?php else: ?>
-<div class="card">
-    <div class="card-body">
-        <table class="table table-striped table-hover">
-            <thead>
+<div class="card shadow-sm">
+    <div class="card-body p-0">
+        <table class="table table-striped table-hover mb-0">
+            <thead class="thead-light">
                 <tr>
                     <th><?php echo get_string('col_name', 'local_student_tracker'); ?></th>
                     <th><?php echo get_string('col_email', 'local_student_tracker'); ?></th>
@@ -140,9 +166,9 @@ echo $OUTPUT->heading(get_string('dashboard_title', 'local_student_tracker'));
                                 : get_string('never', 'local_student_tracker'); ?>
                         </td>
                         <td>
-                            <?php [$class, $strkey] = $badges[$s->tracker_status]; ?>
-                            <span class="badge <?php echo $class; ?> text-uppercase">
-                                <?php echo get_string($strkey, 'local_student_tracker'); ?>
+                            <?php [$badgeclass, $badgestr] = $badges[$s->tracker_status]; ?>
+                            <span class="badge <?php echo $badgeclass; ?> p-2">
+                                <?php echo get_string($badgestr, 'local_student_tracker'); ?>
                             </span>
                         </td>
                     </tr>
@@ -152,6 +178,6 @@ echo $OUTPUT->heading(get_string('dashboard_title', 'local_student_tracker'));
     </div>
 </div>
 <?php endif; ?>
+
 <?php
 echo $OUTPUT->footer();
-
